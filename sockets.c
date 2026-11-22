@@ -48,6 +48,11 @@
 #include <lwip/tcp.h>
 #include <lwip/tcpbase.h>
 
+static inline
+int _lwip_ignore_noncrit_msgflags(int flags)
+{
+	return flags & ~(MSG_NOSIGNAL);
+}
 
 static inline
 int _lwip_getfd(posix_sock *sock)
@@ -58,15 +63,14 @@ int _lwip_getfd(posix_sock *sock)
 static int
 lwip_socket_apply_flags(int lwip_fd, int flags)
 {
-	int val;
+	int val = 1;
 
-	if (flags & SOCK_NONBLOCK) {
-		val = 1;
-
-		val = lwip_ioctl(lwip_fd, FIONBIO, &val);
-		if (unlikely(val < 0)) {
-			return -errno;
-		}
+	/* Set FIONBIO unconditionally, as posix-socket handles blocking
+	 * internally and expects lwip sockets to be always non-blocking.
+	 */
+	val = lwip_ioctl(lwip_fd, FIONBIO, &val);
+	if (unlikely(val < 0)) {
+		return -errno;
 	}
 
 	/* Ignore SOCK_CLOEXEC */
@@ -81,8 +85,7 @@ lwip_posix_socket_create(struct posix_socket_driver *d, int family, int type,
 	int lwip_fd;
 	int flags, rc;
 
-	/* Blocking is handled by posix-socket */
-	flags = (type & SOCK_FLAGS) | SOCK_NONBLOCK;
+	flags = type & SOCK_FLAGS;
 	type = type & ~SOCK_FLAGS;
 
 	lwip_fd = lwip_socket(family, type, protocol);
@@ -113,7 +116,6 @@ lwip_posix_socket_accept4(posix_sock *file,
 	if (unlikely(new_fd < 0))
 		return ERR2PTR(-errno);
 
-	flags |= SOCK_NONBLOCK; /* Blocking is handled by posix-socket */
 	rc = lwip_socket_apply_flags(new_fd, flags);
 	if (unlikely(rc)) {
 		(void)lwip_close(new_fd);
@@ -277,6 +279,8 @@ lwip_posix_socket_recvfrom(posix_sock *file, void *restrict buf,
 	int lwip_fd;
 	ssize_t ret;
 
+	flags = _lwip_ignore_noncrit_msgflags(flags);
+
 	lwip_fd = _lwip_getfd(file);
 	UK_ASSERT(lwip_fd >= 0);
 
@@ -293,6 +297,8 @@ lwip_posix_socket_recvmsg(posix_sock *file, struct msghdr *msg,
 {
 	int lwip_fd;
 	ssize_t ret;
+
+	flags = _lwip_ignore_noncrit_msgflags(flags);
 
 	lwip_fd = _lwip_getfd(file);
 	UK_ASSERT(lwip_fd >= 0);
@@ -311,9 +317,10 @@ lwip_posix_socket_sendmsg(posix_sock *file,
 	int lwip_fd;
 	ssize_t ret;
 
+	flags = _lwip_ignore_noncrit_msgflags(flags);
+
 	lwip_fd = _lwip_getfd(file);
 	UK_ASSERT(lwip_fd >= 0);
-
 	ret = lwip_sendmsg(lwip_fd, msg, flags);
 	if (unlikely(ret < 0))
 		ret = -errno;
@@ -329,6 +336,8 @@ lwip_posix_socket_sendto(posix_sock *file, const void *buf,
 {
 	int lwip_fd;
 	ssize_t ret;
+
+	flags = _lwip_ignore_noncrit_msgflags(flags);
 
 	lwip_fd = _lwip_getfd(file);
 	UK_ASSERT(lwip_fd >= 0);
